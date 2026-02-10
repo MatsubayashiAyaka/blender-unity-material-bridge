@@ -1,4 +1,5 @@
 // Assets/Tools/UrpFbxAutoMaterial/Editor/ManifestLoader.cs
+// v1.1.0
 #nullable enable
 using System;
 using System.IO;
@@ -21,27 +22,31 @@ namespace UrpFbxAutoMaterial
                 LogUtil.Error("ManifestLoader: jsonAssetPath is null or empty.");
                 return null;
             }
+            
+            // アセットパスをフルパスに変換
+            var fullPath = PathUtil.AssetPathToFullPath(jsonAssetPath);
+            LogUtil.Verbose($"ManifestLoader: Loading from '{fullPath}' (asset path: '{jsonAssetPath}')");
 
-            if (!File.Exists(jsonAssetPath))
+            if (!File.Exists(fullPath))
             {
-                LogUtil.Warn($"ManifestLoader: File not found: {jsonAssetPath}");
+                LogUtil.Warn($"ManifestLoader: File not found: {fullPath}");
                 return null;
             }
 
             string json;
             try
             {
-                json = File.ReadAllText(jsonAssetPath, Encoding.UTF8);
+                json = File.ReadAllText(fullPath, Encoding.UTF8);
             }
             catch (Exception ex)
             {
-                LogUtil.Error($"ManifestLoader: Failed to read file '{jsonAssetPath}': {ex.Message}");
+                LogUtil.Error($"ManifestLoader: Failed to read file '{fullPath}': {ex.Message}");
                 return null;
             }
 
             if (string.IsNullOrWhiteSpace(json))
             {
-                LogUtil.Warn($"ManifestLoader: File is empty: {jsonAssetPath}");
+                LogUtil.Warn($"ManifestLoader: File is empty: {fullPath}");
                 return null;
             }
 
@@ -62,6 +67,33 @@ namespace UrpFbxAutoMaterial
                 }
 
                 LogUtil.Verbose($"Manifest: v{manifest.ManifestVersion ?? "unknown"} with {manifest.Meshes.Count} meshes, {manifest.Materials.Count} materials");
+                
+                // デバッグ: マテリアルとテクスチャパスを出力
+                foreach (var kv in manifest.Materials)
+                {
+                    var matName = kv.Key;
+                    var def = kv.Value;
+                    LogUtil.Verbose($"  Material '{matName}':");
+                    if (def?.Textures != null)
+                    {
+                        if (def.Textures.BaseColor != null)
+                            LogUtil.Verbose($"    - BaseColor: {def.Textures.BaseColor.Path}");
+                        if (def.Textures.Metallic != null)
+                            LogUtil.Verbose($"    - Metallic: {def.Textures.Metallic.Path}");
+                        if (def.Textures.Roughness != null)
+                            LogUtil.Verbose($"    - Roughness: {def.Textures.Roughness.Path}");
+                        if (def.Textures.Normal != null)
+                            LogUtil.Verbose($"    - Normal: {def.Textures.Normal.Path}");
+                        if (def.Textures.Emission != null)
+                            LogUtil.Verbose($"    - Emission: {def.Textures.Emission.Path}");
+                        if (def.Textures.AO != null)
+                            LogUtil.Verbose($"    - AO: {def.Textures.AO.Path}");
+                    }
+                    else
+                    {
+                        LogUtil.Verbose($"    - No textures defined");
+                    }
+                }
 
                 return manifest;
             }

@@ -1,4 +1,5 @@
 // Assets/Tools/UrpFbxAutoMaterial/Editor/TextureImportConfigurator.cs
+// v1.1.0 - Fixed "Fix Now" dialog by using OnPreprocessTexture
 #nullable enable
 using System.Collections.Generic;
 using UnityEditor;
@@ -10,6 +11,67 @@ namespace UrpFbxAutoMaterial
     /// </summary>
     public static class TextureImportConfigurator
     {
+        // 保留中のテクスチャ設定（OnPreprocessTexture で使用）
+        private static readonly Dictionary<string, TextureImportSettings> s_pendingSettings = 
+            new(System.StringComparer.OrdinalIgnoreCase);
+        
+        private static readonly object s_lock = new();
+
+        /// <summary>
+        /// テクスチャのインポート設定
+        /// </summary>
+        public struct TextureImportSettings
+        {
+            public bool ExpectedSrgb;
+            public bool IsNormalMap;
+        }
+
+        /// <summary>
+        /// 保留中の設定を登録（OnPreprocessTexture で使用される）
+        /// </summary>
+        public static void RegisterPendingSettings(string assetPath, bool expectedSrgb, bool isNormalMap)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+                return;
+                
+            lock (s_lock)
+            {
+                s_pendingSettings[assetPath] = new TextureImportSettings
+                {
+                    ExpectedSrgb = expectedSrgb,
+                    IsNormalMap = isNormalMap
+                };
+            }
+        }
+
+        /// <summary>
+        /// 保留中の設定を取得して削除
+        /// </summary>
+        public static bool TryGetAndRemovePendingSettings(string assetPath, out TextureImportSettings settings)
+        {
+            lock (s_lock)
+            {
+                if (s_pendingSettings.TryGetValue(assetPath, out settings))
+                {
+                    s_pendingSettings.Remove(assetPath);
+                    return true;
+                }
+            }
+            settings = default;
+            return false;
+        }
+
+        /// <summary>
+        /// 保留中の設定をクリア
+        /// </summary>
+        public static void ClearPendingSettings()
+        {
+            lock (s_lock)
+            {
+                s_pendingSettings.Clear();
+            }
+        }
+
         /// <summary>
         /// Manifest 内のすべてのテクスチャパスを収集する
         /// </summary>
@@ -48,21 +110,64 @@ namespace UrpFbxAutoMaterial
         }
 
         /// <summary>
+        /// Manifest に基づいてテクスチャ設定を事前登録する（OnPreprocessTexture 用）
+        /// </summary>
+        public static void RegisterTextureSettingsForManifest(MaterialManifest manifest, string fbxFolderAssetPath)
+        {
+            if (manifest?.Materials == null)
+                return;
+
+            foreach (var kv in manifest.Materials)
+            {
+                var def = kv.Value;
+                if (def?.Textures == null)
+                    continue;
+
+                // sRGB テクスチャ
+                RegisterTextureSettingIfValid(def.Textures.BaseColor, fbxFolderAssetPath, expectedSrgb: true, isNormalMap: false);
+                RegisterTextureSettingIfValid(def.Textures.Emission, fbxFolderAssetPath, expectedSrgb: true, isNormalMap: false);
+
+                // Linear テクスチャ
+                RegisterTextureSettingIfValid(def.Textures.Metallic, fbxFolderAssetPath, expectedSrgb: false, isNormalMap: false);
+                RegisterTextureSettingIfValid(def.Textures.Roughness, fbxFolderAssetPath, expectedSrgb: false, isNormalMap: false);
+                RegisterTextureSettingIfValid(def.Textures.AO, fbxFolderAssetPath, expectedSrgb: false, isNormalMap: false);
+
+                // Normal Map
+                RegisterTextureSettingIfValid(def.Textures.Normal, fbxFolderAssetPath, expectedSrgb: false, isNormalMap: true);
+            }
+        }
+
+        private static void RegisterTextureSettingIfValid(TextureRef? tref, string fbxFolderAssetPath, bool expectedSrgb, bool isNormalMap)
+        {
+            if (tref == null || string.IsNullOrEmpty(tref.Path) || !tref.IsValidPath())
+                return;
+
+            var texAssetPath = PathUtil.CombineToAssetPath(fbxFolderAssetPath, tref.Path);
+            RegisterPendingSettings(texAssetPath, expectedSrgb, isNormalMap);
+        }
+
+        /// <summary>
         /// テクスチャを強制的にインポートする
         /// </summary>
         public static void ForceImportTextures(List<string> texturePaths)
         {
             foreach (var path in texturePaths)
             {
-                if (System.IO.File.Exists(path))
+                // PathUtil.FileExists を使用（アセットパス対応）
+                if (PathUtil.FileExists(path))
                 {
                     AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+                }
+                else
+                {
+                    LogUtil.Verbose($"Texture file not found: {path}");
                 }
             }
         }
 
         /// <summary>
         /// Manifest 内のすべてのテクスチャに対してインポート設定を適用
+        /// （OnPreprocessTexture が使用できない場合のフォールバック）
         /// </summary>
         public static void ApplyForManifest(MaterialManifest manifest, string fbxFolderAssetPath)
         {
@@ -178,6 +283,36 @@ namespace UrpFbxAutoMaterial
             if (changed)
             {
                 importer.SaveAndReimport();
+            }
+        }
+    }
+
+    /// <summary>
+    /// テクスチャインポート前に設定を適用するプリプロセッサ
+    /// Fix Now ダイアログを回避するため、インポート前に設定を適用
+    /// </summary>
+    public sealed class TexturePreprocessor : AssetPostprocessor
+    {
+        /// <summary>
+        /// テクスチャインポート前に呼ばれるコールバック
+        /// </summary>
+        private void OnPreprocessTexture()
+        {
+            // 登録済みの設定があれば適用
+            if (TextureImportConfigurator.TryGetAndRemovePendingSettings(assetPath, out var settings))
+            {
+                var importer = assetImporter as TextureImporter;
+                if (importer != null)
+                {
+                    importer.sRGBTexture = settings.ExpectedSrgb;
+                    
+                    if (settings.IsNormalMap)
+                    {
+                        importer.textureType = TextureImporterType.NormalMap;
+                    }
+                    
+                    LogUtil.Verbose($"[OnPreprocessTexture] Applied settings: {assetPath} (sRGB={settings.ExpectedSrgb}, normalMap={settings.IsNormalMap})");
+                }
             }
         }
     }

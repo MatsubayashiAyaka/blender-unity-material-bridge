@@ -1,5 +1,7 @@
 // Assets/Tools/UrpFbxAutoMaterial/Editor/ManifestModels.cs
+// v1.1.0 - Data models for material manifest JSON
 #nullable enable
+using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 
@@ -95,7 +97,7 @@ namespace UrpFbxAutoMaterial
         public float[]? BaseColorFactor { get; set; }
 
         [JsonProperty("textures")]
-        public TextureRefs? Textures { get; set; }
+        public TextureSet? Textures { get; set; }
 
         [JsonProperty("params")]
         public MaterialParams? Params { get; set; }
@@ -114,9 +116,9 @@ namespace UrpFbxAutoMaterial
     }
 
     /// <summary>
-    /// テクスチャ参照群
+    /// テクスチャセット
     /// </summary>
-    public sealed class TextureRefs
+    public sealed class TextureSet
     {
         [JsonProperty("base_color")]
         public TextureRef? BaseColor { get; set; }
@@ -138,7 +140,7 @@ namespace UrpFbxAutoMaterial
     }
 
     /// <summary>
-    /// 個別テクスチャ参照
+    /// テクスチャ参照
     /// </summary>
     public sealed class TextureRef
     {
@@ -146,23 +148,28 @@ namespace UrpFbxAutoMaterial
         public string? Path { get; set; }
 
         [JsonProperty("srgb")]
-        public bool Srgb { get; set; }
-
-        [JsonProperty("type")]
-        public string? Type { get; set; }
+        public bool Srgb { get; set; } = true;
 
         [JsonProperty("scale")]
         public float Scale { get; set; } = 1.0f;
 
         /// <summary>
-        /// パスが有効かどうかを検証（親ディレクトリ参照を禁止）
+        /// パスが有効か検証（親ディレクトリ参照を禁止）
         /// </summary>
         public bool IsValidPath()
         {
             if (string.IsNullOrEmpty(Path))
                 return false;
-            // 親ディレクトリ参照 "../" を禁止
-            return !Path.Contains("../") && !Path.Contains("..\\");
+
+            // 親ディレクトリ参照を禁止
+            if (Path.Contains(".."))
+                return false;
+
+            // 絶対パスを禁止
+            if (System.IO.Path.IsPathRooted(Path))
+                return false;
+
+            return true;
         }
     }
 
@@ -182,14 +189,5 @@ namespace UrpFbxAutoMaterial
 
         [JsonProperty("emission_strength")]
         public float EmissionStrength { get; set; } = 1.0f;
-    }
-
-    /// <summary>
-    /// 内部使用：メッシュ→マテリアル割当情報
-    /// </summary>
-    public sealed class MeshMaterialAssignment
-    {
-        public string MeshName { get; set; } = string.Empty;
-        public List<string> MaterialNames { get; set; } = new();
     }
 }
